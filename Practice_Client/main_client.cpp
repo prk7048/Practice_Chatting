@@ -31,14 +31,24 @@ int main(void)
 		std::cout << "Enter message: ";
 		std::cin.getline(message, sizeof(message)); // 한 줄 입력 받기
 
-		char sendBuffer[1024];
-		memcpy(sendBuffer, &message, sizeof(message));
-		send(clientSocket, sendBuffer, strlen(message), 0);
+		if (strlen(message) > 0)
+		{
+			send(clientSocket, message, strlen(message), 0);
+		}
 
 		char recvBuf[1024];
-		int recvsize = recv(clientSocket, recvBuf, sizeof(recvBuf), NULL);
-		recvBuf[recvsize] = '\0';
-		std::cout << recvBuf << std::endl;
+		int recvsize = recv(clientSocket, recvBuf, sizeof(recvBuf), 0);
+		if (recvsize > 0)
+		{
+			recvBuf[recvsize] = '\0';
+			std::cout << recvBuf << std::endl;
+		}
+
+		else
+		{
+			std::cout << "server disconnected" << std::endl;
+			break;
+		}
 	}
 
 	closesocket(clientSocket);

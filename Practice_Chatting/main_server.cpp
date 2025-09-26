@@ -60,8 +60,12 @@ int main(void)
 	while (1)
 	{
 		int recvsize = recv(ClientSocket, recvBuf, sizeof(recvBuf), NULL);
-		if (recvsize == 0)
-		{/*에러처리*/
+
+		// 클라 접속 종료
+		if (recvsize <= 0)
+		{
+			std::cout << "클라 접속 종료" << std::endl;
+			break;
 		}
 
 		int sendsize = send(ClientSocket, recvBuf, recvsize, NULL);
