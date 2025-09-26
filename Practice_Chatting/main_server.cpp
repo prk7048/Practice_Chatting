@@ -57,13 +57,15 @@ int main(void)
 	std::cout << "立加己傍";
 	char recvBuf[1024] = { 0, };
 	char sendBuf[1024] = { 0, };
-	int recvsize = recv(ClientSocket, recvBuf, sizeof(recvBuf), NULL);
-	if (recvsize == 0)
-	{/*俊矾贸府*/
+	while (1)
+	{
+		int recvsize = recv(ClientSocket, recvBuf, sizeof(recvBuf), NULL);
+		if (recvsize == 0)
+		{/*俊矾贸府*/
+		}
+
+		int sendsize = send(ClientSocket, recvBuf, recvsize, NULL);
 	}
-
-	int sendsize = send(ClientSocket, recvBuf, recvsize, NULL);
-
 	closesocket(listenSocket);
 	closesocket(ClientSocket);
 	WSACleanup();

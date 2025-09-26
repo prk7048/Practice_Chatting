@@ -37,7 +37,7 @@ int main(void)
 
 		char recvBuf[1024];
 		int recvsize = recv(clientSocket, recvBuf, sizeof(recvBuf), NULL);
-
+		recvBuf[recvsize] = '\0';
 		std::cout << recvBuf << std::endl;
 	}
 
