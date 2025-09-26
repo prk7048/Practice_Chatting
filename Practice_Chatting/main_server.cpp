@@ -2,10 +2,54 @@
 #include <winsock2.h>
 #include <mswsock.h>
 #include <ws2tcpip.h>
+#include <vector>
+#include <thread>
 
 #pragma comment(lib,"ws2_32.lib")
 
 // 서버
+
+struct Session
+{
+	SOCKET socket;
+	char buf[1024];
+};
+
+std::vector<Session*> SessionList;
+
+// 스레드가 실행할 함수의 원형
+// 반환 타입: unsigned int, 호출 규약: __stdcall, 인자: void 포인터 하나
+unsigned int __stdcall ThreadMain(void* pArguments)
+{
+	std::cout << "접속성공";
+	// 1. main 스레드로부터 넘겨받은 인자(클라이언트 소켓)를 원래 타입으로 되돌린다.
+	Session* clientSession = (Session*)pArguments;
+
+	// 2. 이 스레드는 이제 이 clientSocket하고만 통신하며 자기 할 일을 한다.
+	// (예: recv, send 반복...)
+	while (true)
+	{
+		int recvsize = recv(clientSession->socket, clientSession->buf, sizeof(clientSession->buf), NULL);
+
+		// 클라 접속 종료
+		if (recvsize <= 0)
+		{
+			std::cout << "클라 접속 종료" << std::endl;
+			break;
+		}
+
+		int sendsize = send(clientSession->socket, clientSession->buf, recvsize, NULL);
+	}
+	// 3. 스레드가 종료되기 전에 자원을 정리한다.
+	closesocket(clientSession->socket);
+	// lock
+	//SessionList에서 해당 Session을 찾아서 지워야함
+	//SessionList.
+	// unlock
+	
+	// 4. 스레드를 종료한다.
+	return 0;
+}
 
 int main(void)
 {
@@ -42,35 +86,41 @@ int main(void)
 		return -1;
 	}
 
-	SOCKADDR_IN clientAddr;
-	int addrlen = sizeof(clientAddr);
-	memset(&clientAddr, 0, sizeof(clientAddr));
-	SOCKET ClientSocket = accept(listenSocket, (SOCKADDR*)&clientAddr, &addrlen);
-	if (ClientSocket == INVALID_SOCKET)
-	{
-		std::cout << "Accept Error: " << WSAGetLastError() << std::endl;
-		closesocket(listenSocket);
-		WSACleanup();
-		return -1;
-	}
-
-	std::cout << "접속성공";
-	char recvBuf[1024] = { 0, };
-	char sendBuf[1024] = { 0, };
 	while (1)
 	{
-		int recvsize = recv(ClientSocket, recvBuf, sizeof(recvBuf), NULL);
-
-		// 클라 접속 종료
-		if (recvsize <= 0)
+		SOCKADDR_IN clientAddr;
+		int addrlen = sizeof(clientAddr);
+		memset(&clientAddr, 0, sizeof(clientAddr));
+		SOCKET ClientSocket = accept(listenSocket, (SOCKADDR*)&clientAddr, &addrlen);
+		if (ClientSocket == INVALID_SOCKET)
 		{
-			std::cout << "클라 접속 종료" << std::endl;
-			break;
+			std::cout << "Accept Error: " << WSAGetLastError() << std::endl;
+			closesocket(listenSocket);
+			WSACleanup();
+			return -1;
 		}
 
-		int sendsize = send(ClientSocket, recvBuf, recvsize, NULL);
+		Session* newSession = new Session;
+		newSession->socket = ClientSocket;
+
+		// Lock
+		SessionList.push_back(newSession);
+		// unlock 
+
+		// Session당 thread 하나씩 할당
+		HANDLE hThread = (HANDLE)_beginthreadex(
+			NULL,             // 보안 속성 (보통 NULL)
+			0,                // 스택 크기 (0 = 기본값)
+			ThreadMain,       // 스레드가 실행할 함수 주소
+			(void*)newSession, // 스레드 함수에 전달할 인자
+			0,                // 생성 플래그 (0 = 즉시 실행)
+			NULL              // 스레드 ID를 받을 변수 주소 (보통 NULL)
+		);
+
+		//while을 나가는 조건은 뭐로 해야할까?
 	}
+
+	
 	closesocket(listenSocket);
-	closesocket(ClientSocket);
 	WSACleanup();
 }
