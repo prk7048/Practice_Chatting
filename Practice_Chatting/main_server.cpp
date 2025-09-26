@@ -58,8 +58,6 @@ unsigned int __stdcall ThreadMain(void* pArguments)
 
 		// --- Lock End ---
 		LeaveCriticalSection(&g_cs);
-
-		int sendsize = send(clientSession->socket, clientSession->buf, recvsize, NULL);
 	}
 
 

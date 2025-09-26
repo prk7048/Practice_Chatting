@@ -2,8 +2,32 @@
 #include <WS2tcpip.h>
 #include <winsock2.h>
 #include <mswsock.h>
+#include <process.h>
 
 #pragma comment(lib,"ws2_32.lib")
+// 스레드가 실행할 함수
+unsigned int __stdcall RecvThread(void* pArguments)
+{
+	SOCKET clientSocket = (SOCKET)pArguments;
+	char recvBuf[1024];
+
+	while (true)
+	{
+		int recvsize = recv(clientSocket, recvBuf, sizeof(recvBuf), 0);
+		if (recvsize <= 0)
+		{
+			std::cout << "서버와의 연결이 끊겼습니다." << std::endl;
+			break;
+		}
+
+		recvBuf[recvsize] = '\0';
+		std::cout << "\n[상대방]: " << recvBuf << std::endl;
+		std::cout << "Enter message: ";
+	}
+
+	return 0;
+}
+
 
 int main(void)
 {
@@ -22,31 +46,27 @@ int main(void)
 	if (connectRetval != 0)
 	{
 		std::cout << "connect error!" << std::endl;
+		return -1;
 	}
 
 
-	while (1)
+	std::cout << "server connet!" << std::endl;
+	HANDLE hRecvThread = (HANDLE)_beginthreadex(NULL, 0, RecvThread, (void*)clientSocket, 0, NULL);
+
+	while (true)
 	{
-		char message[256]; // 채팅 메시지 버퍼 (최대 255자)
+		char message[256];
 		std::cout << "Enter message: ";
-		std::cin.getline(message, sizeof(message)); // 한 줄 입력 받기
+		std::cin.getline(message, sizeof(message));
 
 		if (strlen(message) > 0)
 		{
 			send(clientSocket, message, strlen(message), 0);
 		}
 
-		char recvBuf[1024];
-		int recvsize = recv(clientSocket, recvBuf, sizeof(recvBuf), 0);
-		if (recvsize > 0)
+		// "q"를 입력하면 종료
+		if (strcmp(message, "q") == 0)
 		{
-			recvBuf[recvsize] = '\0';
-			std::cout << recvBuf << std::endl;
-		}
-
-		else
-		{
-			std::cout << "server disconnected" << std::endl;
 			break;
 		}
 	}
