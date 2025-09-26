@@ -4,6 +4,7 @@
 #include <ws2tcpip.h>
 #include <vector>
 #include <thread>
+#include <process.h>
 
 #pragma comment(lib,"ws2_32.lib")
 
@@ -15,7 +16,11 @@ struct Session
 	char buf[1024];
 };
 
+// Session List Vector
 std::vector<Session*> SessionList;
+
+// Lock
+CRITICAL_SECTION g_cs;
 
 // 스레드가 실행할 함수의 원형
 // 반환 타입: unsigned int, 호출 규약: __stdcall, 인자: void 포인터 하나
@@ -37,22 +42,52 @@ unsigned int __stdcall ThreadMain(void* pArguments)
 			std::cout << "클라 접속 종료" << std::endl;
 			break;
 		}
+		// --- Lock Start (다른 클라이언트들에게 메시지를 뿌리기 위해 목록을 읽어야 하므로) ---
+		EnterCriticalSection(&g_cs);
+
+		// SessionList를 순회하면서
+		for (Session* otherSession : SessionList)
+		{
+			// 메시지를 보낸 자신을 제외한 다른 모든 클라이언트에게
+			if (otherSession != clientSession)
+			{
+				// 받은 메시지를 그대로 전달한다.
+				send(otherSession->socket, clientSession->buf, recvsize, NULL);
+			}
+		}
+
+		// --- Lock End ---
+		LeaveCriticalSection(&g_cs);
 
 		int sendsize = send(clientSession->socket, clientSession->buf, recvsize, NULL);
 	}
+
+
 	// 3. 스레드가 종료되기 전에 자원을 정리한다.
 	closesocket(clientSession->socket);
 	// lock
-	//SessionList에서 해당 Session을 찾아서 지워야함
-	//SessionList.
+	EnterCriticalSection(&g_cs);
+	// SessionList에서 현재 스레드가 담당하던 세션을 찾아 제거
+	for (auto it = SessionList.begin(); it != SessionList.end(); ++it)
+	{
+		if (*it == clientSession)
+		{
+			SessionList.erase(it);
+			break;
+		}
+	}
 	// unlock
-	
+	LeaveCriticalSection(&g_cs);
+
+	delete clientSession; // 동적 할당된 메모리 해제
 	// 4. 스레드를 종료한다.
 	return 0;
 }
 
 int main(void)
 {
+	InitializeCriticalSection(&g_cs);
+
 	WSAData wsaData;
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 	{
@@ -104,8 +139,10 @@ int main(void)
 		newSession->socket = ClientSocket;
 
 		// Lock
+		EnterCriticalSection(&g_cs);
 		SessionList.push_back(newSession);
 		// unlock 
+		LeaveCriticalSection(&g_cs);
 
 		// Session당 thread 하나씩 할당
 		HANDLE hThread = (HANDLE)_beginthreadex(
@@ -120,7 +157,7 @@ int main(void)
 		//while을 나가는 조건은 뭐로 해야할까?
 	}
 
-	
+	DeleteCriticalSection(&g_cs);
 	closesocket(listenSocket);
 	WSACleanup();
 }
