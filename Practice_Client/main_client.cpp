@@ -35,6 +35,10 @@ int main(void)
 		memcpy(sendBuffer, &message, sizeof(message));
 		send(clientSocket, sendBuffer, strlen(message), 0);
 
+		char recvBuf[1024];
+		int recvsize = recv(clientSocket, recvBuf, sizeof(recvBuf), NULL);
+
+		std::cout << recvBuf << std::endl;
 	}
 
 	closesocket(clientSocket);
