@@ -10,10 +10,39 @@
 
 // 서버
 
+// 어떤 I/O 작업인지 구분하기 위한 열거형
+enum class EIoOperation
+{
+	IO_ACCEPT, // IOCP에서는 accept 또한 비동기로 처리할 수 있습니다. (고급 주제)
+	IO_RECV,
+	IO_SEND
+};
+
+// I/O 작업에 필요한 데이터를 담는 확장 Overlapped 구조체
+struct OverlappedEx
+{
+	OVERLAPPED overlapped;      // 모든 비동기 I/O의 기본이 되는 구조체
+	EIoOperation ioType;        // 이 Overlapped 객체가 어떤 종류의 작업에 사용되었는지 구분
+	void* session;              // 이 I/O 작업이 어떤 세션에 속해있는지를 가리키는 포인터
+
+	// WSABUF는 버퍼의 주소와 길이를 담는 구조체입니다.
+	// WSARecv, WSASend는 이 정보를 보고 데이터를 읽거나 씁니다.
+	WSABUF wsaBuf;
+};
+
+// 클라이언트 하나의 정보를 담는 세션 구조체
 struct Session
 {
 	SOCKET socket;
-	char buf[1024];
+	OverlappedEx recvOverlapped; // 각 세션은 자신만의 '수신'용 OverlappedEx를 가집니다.
+
+	// 생성자에서 멤버 변수들을 초기화합니다.
+	Session() : socket(INVALID_SOCKET)
+	{
+		ZeroMemory(&recvOverlapped.overlapped, sizeof(recvOverlapped.overlapped));
+		recvOverlapped.ioType = EIoOperation::IO_RECV;
+		recvOverlapped.session = this; // 자기 자신을 가리키도록 설정
+	}
 };
 
 // Session List Vector
@@ -82,6 +111,12 @@ unsigned int __stdcall ThreadMain(void* pArguments)
 	return 0;
 }
 
+// Worker 스레드가 실행할 함수
+unsigned int __stdcall WorkerThread(void* pArguments)
+{
+	return 0;
+}
+
 int main(void)
 {
 	InitializeCriticalSection(&g_cs);
@@ -91,6 +126,27 @@ int main(void)
 	{
 		std::cout << "WSAStartup err";
 		return -1;
+	}
+	// 1. IOCP 객체(Completion Port) 생성
+	HANDLE hIocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	if (hIocp == NULL)
+	{
+		std::cout << "CreateIoCompletionPort failed" << std::endl;
+		return -1;
+	}
+
+	// 2. CPU 코어 개수만큼 Worker 스레드 생성
+	SYSTEM_INFO sysInfo;
+	GetSystemInfo(&sysInfo);
+	int threadCount = sysInfo.dwNumberOfProcessors;
+
+	for (int i = 0; i < threadCount; ++i)
+	{
+		HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, WorkerThread, hIocp, 0, NULL);
+		if (hThread != NULL)
+		{
+			CloseHandle(hThread);
+		}
 	}
 
 	SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -119,40 +175,12 @@ int main(void)
 		return -1;
 	}
 
-	while (1)
+	std::cout << "Server Start!" << std::endl;
+
+	// 이제 메인 스레드는 아무것도 하지 않고 프로그램이 끝나지 않도록 대기
+	while (true)
 	{
-		SOCKADDR_IN clientAddr;
-		int addrlen = sizeof(clientAddr);
-		memset(&clientAddr, 0, sizeof(clientAddr));
-		SOCKET ClientSocket = accept(listenSocket, (SOCKADDR*)&clientAddr, &addrlen);
-		if (ClientSocket == INVALID_SOCKET)
-		{
-			std::cout << "Accept Error: " << WSAGetLastError() << std::endl;
-			closesocket(listenSocket);
-			WSACleanup();
-			return -1;
-		}
-
-		Session* newSession = new Session;
-		newSession->socket = ClientSocket;
-
-		// Lock
-		EnterCriticalSection(&g_cs);
-		SessionList.push_back(newSession);
-		// unlock 
-		LeaveCriticalSection(&g_cs);
-
-		// Session당 thread 하나씩 할당
-		HANDLE hThread = (HANDLE)_beginthreadex(
-			NULL,             // 보안 속성 (보통 NULL)
-			0,                // 스택 크기 (0 = 기본값)
-			ThreadMain,       // 스레드가 실행할 함수 주소
-			(void*)newSession, // 스레드 함수에 전달할 인자
-			0,                // 생성 플래그 (0 = 즉시 실행)
-			NULL              // 스레드 ID를 받을 변수 주소 (보통 NULL)
-		);
-
-		//while을 나가는 조건은 뭐로 해야할까?
+		Sleep(1000); // 1초에 한 번씩 깨어나서 멍때리기
 	}
 
 	DeleteCriticalSection(&g_cs);
