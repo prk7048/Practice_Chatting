@@ -28,6 +28,7 @@ struct OverlappedEx
 	// WSABUF는 버퍼의 주소와 길이를 담는 구조체입니다.
 	// WSARecv, WSASend는 이 정보를 보고 데이터를 읽거나 씁니다.
 	WSABUF wsaBuf;
+	char buffer[1024];
 };
 
 // 클라이언트 하나의 정보를 담는 세션 구조체
@@ -67,30 +68,49 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 		// 1. 완료된 I/O 작업이 큐에 생길 때까지 무한 대기 (은행원이 번호표 알림을 기다림)
 		BOOL ret = GetQueuedCompletionStatus(hIocp, &bytesTransferred, (PULONG_PTR)&pSession, (LPOVERLAPPED*)&pOverlappedEx, INFINITE);
 
+		// ret이 FALSE거나 bytesTransferred가 0이면 클라이언트 접속이 끊긴 것
 		if (ret == FALSE || bytesTransferred == 0)
 		{
-			// 클라이언트 접속 종료 또는 에러 처리
-			// (나중에 구현)
-			continue;
-		}
+			std::cout << pSession->socket << " socket disconnected" << std::endl;
 
-		// 2. 완료된 작업의 종류를 확인하고 처리
-		if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
-		{
-			std::cout << "Received data: " << bytesTransferred << " bytes" << std::endl;
-
-			// 여기에 브로드캐스팅 로직을 추가할 수 있습니다.
-
-			// 3. 다음 수신을 위해 WSARecv를 다시 호출
-			DWORD recvBytes = 0;
-			DWORD flags = 0;
-			if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
+			// 1. 세션 목록에서 해당 세션을 제거
+			EnterCriticalSection(&g_cs);
+			for (auto it = SessionList.begin(); it != SessionList.end(); ++it)
 			{
-				if (WSAGetLastError() != WSA_IO_PENDING)
+				if (*it == pSession)
 				{
-					std::cout << "WSARecv failed in worker" << std::endl;
-					// 에러 처리
+					SessionList.erase(it);
+					break;
 				}
+			}
+			LeaveCriticalSection(&g_cs);
+
+			// 2. 완료된 작업의 종류를 확인하고 처리
+			if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
+			{
+				std::cout << pSession->socket << " socket Received data: " << bytesTransferred << " bytes" << std::endl;
+
+				// --- 여기에 브로드캐스팅 로직을 추가합니다 ---
+				EnterCriticalSection(&g_cs);
+
+				for (Session* pOtherSession : SessionList)
+				{
+					// 메시지를 보낸 자신을 제외한 다른 모든 클라이언트에게
+					if (pOtherSession != pSession)
+					{
+						// 중요: 이제 send도 비동기로 처리해야 합니다.
+						// 하지만 지금은 개념 이해를 위해 동기 send를 잠시 사용하겠습니다.
+						send(pOtherSession->socket, pOverlappedEx->buffer, bytesTransferred, 0);
+					}
+				}
+
+				LeaveCriticalSection(&g_cs);
+
+				// 2. 소켓을 닫고 세션 객체 메모리 해제
+				closesocket(pSession->socket);
+				delete pSession;
+
+				continue; // 다음 작업을 기다림
 			}
 		}
 	}
@@ -183,6 +203,10 @@ int main(void)
 			delete pSession;
 			continue;
 		}
+
+		EnterCriticalSection(&g_cs);
+		SessionList.push_back(pSession);
+		LeaveCriticalSection(&g_cs);
 
 		// 3. 이 클라이언트에 대한 첫 번째 비동기 수신(WSARecv)을 '요청'합니다.
 		//    OverlappedEx 구조체의 포인터를 넘겨주는 것이 핵심입니다.
