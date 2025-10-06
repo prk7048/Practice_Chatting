@@ -93,23 +93,39 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 			continue; // 다음 작업을 기다림
 		}
 
+		// WorkerThread 함수 안의 if (pOverlappedEx->ioType == EIoOperation::IO_RECV) 블록
+
 		// --- 성공 경로 (I/O 작업 완료) ---
 		if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
 		{
-			std::cout << pSession->socket << " socket Received data: " << bytesTransferred << " bytes" << std::endl;
+			// 1. 받은 데이터를 PacketHeader로 캐스팅하여 어떤 종류의 패킷인지 확인한다.
+			PacketHeader* header = (PacketHeader*)pOverlappedEx->buffer;
 
-			// 1. 브로드캐스팅 로직 실행
-			EnterCriticalSection(&g_cs);
-			for (Session* pOtherSession : SessionList)
+			// 2. 패킷 종류에 따라 처리를 분기한다.
+			if (header->packetType == PacketType::CHAT_MESSAGE)
 			{
-				if (pOtherSession != pSession)
-				{
-					send(pOtherSession->socket, pOverlappedEx->buffer, bytesTransferred, 0);
-				}
-			}
-			LeaveCriticalSection(&g_cs);
+				// 받은 패킷이 ChatMessagePacket이라고 확신하고 캐스팅한다.
+				ChatMessagePacket* chatPacket = (ChatMessagePacket*)pOverlappedEx->buffer;
 
-			// 2. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
+				std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
+
+				// 3. 브로드캐스팅 로직: 받은 패킷 그대로를 다른 클라이언트에게 전달한다.
+				EnterCriticalSection(&g_cs);
+				for (Session* pOtherSession : SessionList)
+				{
+					if (pOtherSession != pSession)
+					{
+						// 받은 패킷의 크기(header->packetSize)만큼만 정확히 보낸다.
+						send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
+					}
+				}
+				LeaveCriticalSection(&g_cs);
+			}
+			// else if (header->packetType == PacketType::LOGIN_REQUEST) { ... }
+			// 나중에 다른 종류의 패킷 처리 로직을 여기에 추가할 수 있다.
+
+
+			// 4. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
 			DWORD recvBytes = 0;
 			DWORD flags = 0;
 			if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
