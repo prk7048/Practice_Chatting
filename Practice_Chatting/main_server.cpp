@@ -51,69 +51,49 @@ std::vector<Session*> SessionList;
 // Lock
 CRITICAL_SECTION g_cs;
 
-// 스레드가 실행할 함수의 원형
-// 반환 타입: unsigned int, 호출 규약: __stdcall, 인자: void 포인터 하나
-unsigned int __stdcall ThreadMain(void* pArguments)
-{
-	std::cout << "접속성공";
-	// 1. main 스레드로부터 넘겨받은 인자(클라이언트 소켓)를 원래 타입으로 되돌린다.
-	Session* clientSession = (Session*)pArguments;
 
-	// 2. 이 스레드는 이제 이 clientSocket하고만 통신하며 자기 할 일을 한다.
-	// (예: recv, send 반복...)
-	while (true)
-	{
-		int recvsize = recv(clientSession->socket, clientSession->buf, sizeof(clientSession->buf), NULL);
-
-		// 클라 접속 종료
-		if (recvsize <= 0)
-		{
-			std::cout << "클라 접속 종료" << std::endl;
-			break;
-		}
-		// --- Lock Start (다른 클라이언트들에게 메시지를 뿌리기 위해 목록을 읽어야 하므로) ---
-		EnterCriticalSection(&g_cs);
-
-		// SessionList를 순회하면서
-		for (Session* otherSession : SessionList)
-		{
-			// 메시지를 보낸 자신을 제외한 다른 모든 클라이언트에게
-			if (otherSession != clientSession)
-			{
-				// 받은 메시지를 그대로 전달한다.
-				send(otherSession->socket, clientSession->buf, recvsize, NULL);
-			}
-		}
-
-		// --- Lock End ---
-		LeaveCriticalSection(&g_cs);
-	}
-
-
-	// 3. 스레드가 종료되기 전에 자원을 정리한다.
-	closesocket(clientSession->socket);
-	// lock
-	EnterCriticalSection(&g_cs);
-	// SessionList에서 현재 스레드가 담당하던 세션을 찾아 제거
-	for (auto it = SessionList.begin(); it != SessionList.end(); ++it)
-	{
-		if (*it == clientSession)
-		{
-			SessionList.erase(it);
-			break;
-		}
-	}
-	// unlock
-	LeaveCriticalSection(&g_cs);
-
-	delete clientSession; // 동적 할당된 메모리 해제
-	// 4. 스레드를 종료한다.
-	return 0;
-}
 
 // Worker 스레드가 실행할 함수
 unsigned int __stdcall WorkerThread(void* pArguments)
 {
+	HANDLE hIocp = (HANDLE)pArguments;
+
+	while (true)
+	{
+		OverlappedEx* pOverlappedEx = nullptr;
+		Session* pSession = nullptr;
+		DWORD bytesTransferred = 0;
+
+		// 1. 완료된 I/O 작업이 큐에 생길 때까지 무한 대기 (은행원이 번호표 알림을 기다림)
+		BOOL ret = GetQueuedCompletionStatus(hIocp, &bytesTransferred, (PULONG_PTR)&pSession, (LPOVERLAPPED*)&pOverlappedEx, INFINITE);
+
+		if (ret == FALSE || bytesTransferred == 0)
+		{
+			// 클라이언트 접속 종료 또는 에러 처리
+			// (나중에 구현)
+			continue;
+		}
+
+		// 2. 완료된 작업의 종류를 확인하고 처리
+		if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
+		{
+			std::cout << "Received data: " << bytesTransferred << " bytes" << std::endl;
+
+			// 여기에 브로드캐스팅 로직을 추가할 수 있습니다.
+
+			// 3. 다음 수신을 위해 WSARecv를 다시 호출
+			DWORD recvBytes = 0;
+			DWORD flags = 0;
+			if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
+			{
+				if (WSAGetLastError() != WSA_IO_PENDING)
+				{
+					std::cout << "WSARecv failed in worker" << std::endl;
+					// 에러 처리
+				}
+			}
+		}
+	}
 	return 0;
 }
 
@@ -178,9 +158,50 @@ int main(void)
 	std::cout << "Server Start!" << std::endl;
 
 	// 이제 메인 스레드는 아무것도 하지 않고 프로그램이 끝나지 않도록 대기
+	// 이제 이 루프는 새로운 클라이언트의 접속을 받아 IOCP에 등록하는 역할을 합니다.
 	while (true)
 	{
-		Sleep(1000); // 1초에 한 번씩 깨어나서 멍때리기
+		SOCKADDR_IN clientAddr;
+		int addrlen = sizeof(clientAddr);
+		SOCKET clientSocket = accept(listenSocket, (SOCKADDR*)&clientAddr, &addrlen);
+		if (clientSocket == INVALID_SOCKET)
+		{
+			std::cout << "accept failed" << std::endl;
+			continue;
+		}
+
+		// 1. 새로운 클라이언트를 위한 세션 객체 생성
+		Session* pSession = new Session();
+		pSession->socket = clientSocket;
+
+		// 2. 새로 생성된 클라이언트 소켓을 IOCP 객체와 연결
+		//    세 번째 인자(pSession)가 바로 CompletionKey입니다.
+		//    나중에 GQCS에서 이 세션 포인터를 그대로 돌려받게 됩니다.
+		if (CreateIoCompletionPort((HANDLE)pSession->socket, hIocp, (ULONG_PTR)pSession, 0) == NULL)
+		{
+			std::cout << "CreateIoCompletionPort failed for client socket" << std::endl;
+			delete pSession;
+			continue;
+		}
+
+		// 3. 이 클라이언트에 대한 첫 번째 비동기 수신(WSARecv)을 '요청'합니다.
+		//    OverlappedEx 구조체의 포인터를 넘겨주는 것이 핵심입니다.
+		OverlappedEx* pOverlappedEx = &pSession->recvOverlapped;
+		DWORD recvBytes = 0;
+		DWORD flags = 0;
+
+		// WSABUF 설정
+		pOverlappedEx->wsaBuf.buf = pOverlappedEx->buffer;
+		pOverlappedEx->wsaBuf.len = sizeof(pOverlappedEx->buffer);
+
+		if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
+		{
+			if (WSAGetLastError() != WSA_IO_PENDING)
+			{
+				std::cout << "WSARecv failed" << std::endl;
+				// 에러 처리 (세션 삭제 등)
+			}
+		}
 	}
 
 	DeleteCriticalSection(&g_cs);
