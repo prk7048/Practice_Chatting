@@ -54,7 +54,6 @@ CRITICAL_SECTION g_cs;
 
 
 
-// Worker 스레드가 실행할 함수
 unsigned int __stdcall WorkerThread(void* pArguments)
 {
 	HANDLE hIocp = (HANDLE)pArguments;
@@ -65,52 +64,60 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 		Session* pSession = nullptr;
 		DWORD bytesTransferred = 0;
 
-		// 1. 완료된 I/O 작업이 큐에 생길 때까지 무한 대기 (은행원이 번호표 알림을 기다림)
 		BOOL ret = GetQueuedCompletionStatus(hIocp, &bytesTransferred, (PULONG_PTR)&pSession, (LPOVERLAPPED*)&pOverlappedEx, INFINITE);
 
-		// ret이 FALSE거나 bytesTransferred가 0이면 클라이언트 접속이 끊긴 것
+		// --- 실패 경로 (접속 종료 또는 에러) ---
 		if (ret == FALSE || bytesTransferred == 0)
 		{
-			std::cout << pSession->socket << " socket disconnected" << std::endl;
-
-			// 1. 세션 목록에서 해당 세션을 제거
-			EnterCriticalSection(&g_cs);
-			for (auto it = SessionList.begin(); it != SessionList.end(); ++it)
+			if (pSession != nullptr) // pSession이 NULL이 아닐 때만 처리
 			{
-				if (*it == pSession)
-				{
-					SessionList.erase(it);
-					break;
-				}
-			}
-			LeaveCriticalSection(&g_cs);
+				std::cout << pSession->socket << " socket disconnected" << std::endl;
 
-			// 2. 완료된 작업의 종류를 확인하고 처리
-			if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
-			{
-				std::cout << pSession->socket << " socket Received data: " << bytesTransferred << " bytes" << std::endl;
-
-				// --- 여기에 브로드캐스팅 로직을 추가합니다 ---
+				// 1. 세션 목록에서 해당 세션을 제거
 				EnterCriticalSection(&g_cs);
-
-				for (Session* pOtherSession : SessionList)
+				for (auto it = SessionList.begin(); it != SessionList.end(); ++it)
 				{
-					// 메시지를 보낸 자신을 제외한 다른 모든 클라이언트에게
-					if (pOtherSession != pSession)
+					if (*it == pSession)
 					{
-						// 중요: 이제 send도 비동기로 처리해야 합니다.
-						// 하지만 지금은 개념 이해를 위해 동기 send를 잠시 사용하겠습니다.
-						send(pOtherSession->socket, pOverlappedEx->buffer, bytesTransferred, 0);
+						SessionList.erase(it);
+						break;
 					}
 				}
-
 				LeaveCriticalSection(&g_cs);
 
 				// 2. 소켓을 닫고 세션 객체 메모리 해제
 				closesocket(pSession->socket);
 				delete pSession;
+			}
+			continue; // 다음 작업을 기다림
+		}
 
-				continue; // 다음 작업을 기다림
+		// --- 성공 경로 (I/O 작업 완료) ---
+		if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
+		{
+			std::cout << pSession->socket << " socket Received data: " << bytesTransferred << " bytes" << std::endl;
+
+			// 1. 브로드캐스팅 로직 실행
+			EnterCriticalSection(&g_cs);
+			for (Session* pOtherSession : SessionList)
+			{
+				if (pOtherSession != pSession)
+				{
+					send(pOtherSession->socket, pOverlappedEx->buffer, bytesTransferred, 0);
+				}
+			}
+			LeaveCriticalSection(&g_cs);
+
+			// 2. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
+			DWORD recvBytes = 0;
+			DWORD flags = 0;
+			if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
+			{
+				if (WSAGetLastError() != WSA_IO_PENDING)
+				{
+					std::cout << "WSARecv failed in worker" << std::endl;
+					// 실제로는 여기서도 접속 종료 처리를 해줘야 합니다.
+				}
 			}
 		}
 	}
