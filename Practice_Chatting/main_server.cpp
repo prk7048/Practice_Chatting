@@ -6,6 +6,7 @@
 #include <thread>
 #include <process.h>
 
+#include "protocol.h"
 #pragma comment(lib,"ws2_32.lib")
 
 // ¼­¹ö
