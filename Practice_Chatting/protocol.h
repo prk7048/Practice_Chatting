@@ -42,9 +42,12 @@ constexpr int CHAT_LENGTH = 256;
 enum class PacketType : short
 {
     LOGIN_REQUEST = 1,
-    CHAT_MESSAGE_REQUEST = 2, // 클라이언트가 서버로 보내는 채팅 요청
-    CHAT_MESSAGE_BROADCAST = 3, // 서버가 클라이언트들에게 뿌리는 채팅
-    SYSTEM_MESSAGE_BROADCAST = 4,
+    LOGIN_RESPONSE = 2, // --- 타입을 하나로 통합하고, 구조체 내부 플래그로 성공/실패 구분
+
+    CHAT_MESSAGE_REQUEST = 10,
+    CHAT_MESSAGE_BROADCAST = 11,
+
+    SYSTEM_MESSAGE_BROADCAST = 20,
 };
 
 #pragma pack(push, 1)
@@ -59,6 +62,13 @@ struct LoginRequestPacket
 {
     PacketHeader header;
     char nickname[NICKNAME_LENGTH];
+};
+
+// 로그인 응답 패킷 (Server -> Client)
+struct LoginResponsePacket
+{
+    PacketHeader header;
+    bool success; // true: 성공, false: 실패(중복 닉네임)
 };
 
 // 채팅 요청 패킷 (Client -> Server)

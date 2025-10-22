@@ -226,53 +226,110 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 				if (header->packetType == PacketType::LOGIN_REQUEST)
 				{
 					LoginRequestPacket* loginPacket = (LoginRequestPacket*)&pSession->recvBuffer[processedBytes];
+					loginPacket->nickname[NICKNAME_LENGTH - 1] = '\0'; // 널 문자 보장
 
-					// 세션에 닉네임 저장
-					strcpy_s(pSession->nickname, loginPacket->nickname);
-					std::cout << pSession->socket << " Logged in as: " << pSession->nickname << std::endl;
+					bool isNicknameDuplicate = false;
 
-					// 모든 클라이언트에게 입장 알림 메시지 브로드캐스팅
-					SystemMessageBroadcastPacket enterPacket;
-					enterPacket.header.packetType = PacketType::SYSTEM_MESSAGE_BROADCAST;
-					sprintf_s(enterPacket.message, "[SYSTEM] '%s'님이 입장했습니다.", pSession->nickname);
-					enterPacket.header.packetSize = sizeof(PacketHeader) + strlen(enterPacket.message) + 1;
-
+					// --- 닉네임 중복 검사 ---
 					EnterCriticalSection(&g_cs);
 					for (Session* pOtherSession : SessionList)
 					{
-						// 자기 자신을 제외한 다른 로그인 된 사용자에게만 보낸다.
+						// 자기 자신은 아니고, 이미 로그인 된 세션 중에서
 						if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
 						{
-							send(pOtherSession->socket, (const char*)&enterPacket, enterPacket.header.packetSize, 0);
+							if (strcmp(pOtherSession->nickname, loginPacket->nickname) == 0)
+							{
+								isNicknameDuplicate = true;
+								break;
+							}
 						}
 					}
 					LeaveCriticalSection(&g_cs);
-				
+
+					// --- 결과에 따른 응답 패킷 전송 ---
+					LoginResponsePacket responsePacket;
+					responsePacket.header.packetType = PacketType::LOGIN_RESPONSE;
+					responsePacket.header.packetSize = sizeof(LoginResponsePacket);
+					responsePacket.success = !isNicknameDuplicate;
+
+					send(pSession->socket, (const char*)&responsePacket, responsePacket.header.packetSize, 0);
+
+					// --- 성공했을 경우에만 후속 처리 ---
+					if (responsePacket.success)
+					{
+						strcpy_s(pSession->nickname, loginPacket->nickname);
+						std::cout << pSession->socket << " Logged in as: " << pSession->nickname << std::endl;
+
+						// 입장 알림 브로드캐스팅 (기존 코드)
+						SystemMessageBroadcastPacket enterPacket;
+						enterPacket.header.packetType = PacketType::SYSTEM_MESSAGE_BROADCAST;
+						sprintf_s(enterPacket.message, "[SYSTEM] '%s'님이 입장했습니다.", pSession->nickname);
+						enterPacket.header.packetSize = sizeof(SystemMessageBroadcastPacket);
+
+						EnterCriticalSection(&g_cs);
+						for (Session* pOtherSession : SessionList)
+						{
+							if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
+							{
+								send(pOtherSession->socket, (const char*)&enterPacket, enterPacket.header.packetSize, 0);
+							}
+						}
+						LeaveCriticalSection(&g_cs);
+					}
+					else
+					{
+						std::cout << pSession->socket << " Failed to login. Duplicate nickname: " << loginPacket->nickname << std::endl;
+						// 실패 시에는 아무것도 안 하면, 클라이언트가 접속을 끊고 종료하게 된다.
+					}
 				}
 				else if (header->packetType == PacketType::CHAT_MESSAGE_REQUEST)
 				{
 					ChatMessageRequestPacket* requestPacket = (ChatMessageRequestPacket*)&pSession->recvBuffer[processedBytes];
 					std::cout << pSession->nickname << " Chat: " << requestPacket->message << std::endl;
 
-					// 3-1. 다른 클라이언트에게 브로드캐스팅할 패킷을 새로 만든다.
+					// 1. 다른 클라이언트에게 브로드캐스팅할 패킷을 만든다.
 					ChatMessageBroadcastPacket broadcastPacket;
 					broadcastPacket.header.packetType = PacketType::CHAT_MESSAGE_BROADCAST;
+
+					// 2. [핵심] 패킷 크기를 구조체 전체 크기로 고정한다.
+					broadcastPacket.header.packetSize = sizeof(ChatMessageBroadcastPacket);
+
+					// 3. 닉네임과 메시지를 복사한다.
 					strcpy_s(broadcastPacket.nickname, pSession->nickname);
 					strcpy_s(broadcastPacket.message, requestPacket->message);
-					broadcastPacket.header.packetSize = sizeof(PacketHeader) + strlen(broadcastPacket.nickname) + 1 + strlen(broadcastPacket.message) + 1;
 
-					// 3-2. 브로드캐스팅 로직
+					// 4. 브로드캐스팅 로직 (기존과 동일)
 					EnterCriticalSection(&g_cs);
 					for (Session* pOtherSession : SessionList)
 					{
-						// 로그인 된 다른 사용자에게만 보낸다. (자기 자신 제외)
 						if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
 						{
+							// 보낼 때도 고정된 크기(sizeof)로 보낸다.
 							send(pOtherSession->socket, (const char*)&broadcastPacket, broadcastPacket.header.packetSize, 0);
 						}
 					}
 					LeaveCriticalSection(&g_cs);
 				}
+
+				//	// 3-1. 다른 클라이언트에게 브로드캐스팅할 패킷을 새로 만든다.
+				//	ChatMessageBroadcastPacket broadcastPacket;
+				//	broadcastPacket.header.packetType = PacketType::CHAT_MESSAGE_BROADCAST;
+				//	strcpy_s(broadcastPacket.nickname, pSession->nickname);
+				//	strcpy_s(broadcastPacket.message, requestPacket->message);
+				//	broadcastPacket.header.packetSize = sizeof(PacketHeader) + strlen(broadcastPacket.nickname) + 1 + strlen(broadcastPacket.message) + 1;
+
+				//	// 3-2. 브로드캐스팅 로직
+				//	EnterCriticalSection(&g_cs);
+				//	for (Session* pOtherSession : SessionList)
+				//	{
+				//		// 로그인 된 다른 사용자에게만 보낸다. (자기 자신 제외)
+				//		if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
+				//		{
+				//			send(pOtherSession->socket, (const char*)&broadcastPacket, broadcastPacket.header.packetSize, 0);
+				//		}
+				//	}
+				//	LeaveCriticalSection(&g_cs);
+				//}
 				// 4. 처리한 만큼 위치와 남은 데이터 양을 갱신
 				processedBytes += header->packetSize;
 				pSession->recvBytes -= header->packetSize;

@@ -180,9 +180,39 @@ int main(void)
     loginPacket.header.packetSize = sizeof(PacketHeader) + strlen(loginPacket.nickname) + 1;
     send(clientSocket, (const char*)&loginPacket, loginPacket.header.packetSize, 0);
 
-    // 수신 스레드 생성
-    HANDLE hRecvThread = (HANDLE)_beginthreadex(NULL, 0, RecvThread, (void*)clientSocket, 0, NULL);
+    // --- 서버의 로그인 응답 대기 ---
+    char recvBuf[1024];
+    int recvSize = recv(clientSocket, recvBuf, sizeof(recvBuf), 0);
+    if (recvSize <= 0)
+    {
+        std::cout << "Server connection lost." << std::endl;
+        return -1;
+    }
 
+    PacketHeader* header = (PacketHeader*)recvBuf;
+    if (header->packetType == PacketType::LOGIN_RESPONSE)
+    {
+        LoginResponsePacket* responsePacket = (LoginResponsePacket*)recvBuf;
+        if (responsePacket->success)
+        {
+            std::cout << "Login successful. Welcome, " << nickname << "!" << std::endl;
+        }
+        else
+        {
+            std::cout << "Login failed. The nickname is already in use." << std::endl;
+            closesocket(clientSocket);
+            WSACleanup();
+            return -1; // 프로그램 종료
+        }
+    }
+    else
+    {
+        std::cout << "Invalid response from server." << std::endl;
+        return -1;
+    }
+
+    // 로그인 성공 시에만 수신 스레드 생성 및 채팅 시작
+    HANDLE hRecvThread = (HANDLE)_beginthreadex(NULL, 0, RecvThread, (void*)clientSocket, 0, NULL);
     // --- 송신(Send) 전용 메인 스레드 ---
     while (true)
     {
