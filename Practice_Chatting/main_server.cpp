@@ -32,18 +32,37 @@ struct OverlappedEx
 	char buffer[1024];
 };
 
+//// 클라이언트 하나의 정보를 담는 세션 구조체
+//struct Session
+//{
+//	SOCKET socket;
+//	OverlappedEx recvOverlapped; // 각 세션은 자신만의 '수신'용 OverlappedEx를 가집니다.
+//
+//	// 생성자에서 멤버 변수들을 초기화합니다.
+//	Session() : socket(INVALID_SOCKET)
+//	{
+//		ZeroMemory(&recvOverlapped.overlapped, sizeof(recvOverlapped.overlapped));
+//		recvOverlapped.ioType = EIoOperation::IO_RECV;
+//		recvOverlapped.session = this; // 자기 자신을 가리키도록 설정
+//	}
+//};
+
 // 클라이언트 하나의 정보를 담는 세션 구조체
 struct Session
 {
 	SOCKET socket;
-	OverlappedEx recvOverlapped; // 각 세션은 자신만의 '수신'용 OverlappedEx를 가집니다.
+	OverlappedEx recvOverlapped;
+
+	char recvBuffer[4096]; // 각 세션별 수신 버퍼
+	int recvBytes;         // 현재까지 수신한 바이트 수
 
 	// 생성자에서 멤버 변수들을 초기화합니다.
-	Session() : socket(INVALID_SOCKET)
+	Session() : socket(INVALID_SOCKET), recvBytes(0) // recvBytes 초기화 추가
 	{
 		ZeroMemory(&recvOverlapped.overlapped, sizeof(recvOverlapped.overlapped));
 		recvOverlapped.ioType = EIoOperation::IO_RECV;
-		recvOverlapped.session = this; // 자기 자신을 가리키도록 설정
+		recvOverlapped.session = this;
+		ZeroMemory(recvBuffer, sizeof(recvBuffer)); // 버퍼 초기화
 	}
 };
 
@@ -93,47 +112,116 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 			continue; // 다음 작업을 기다림
 		}
 
-		// WorkerThread 함수 안의 if (pOverlappedEx->ioType == EIoOperation::IO_RECV) 블록
 
-		// --- 성공 경로 (I/O 작업 완료) ---
+		//// WorkerThread 함수 안의 if (pOverlappedEx->ioType == EIoOperation::IO_RECV) 블록
+
+		//// --- 성공 경로 (I/O 작업 완료) ---
+		//if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
+		//{
+		//	// 1. 받은 데이터를 PacketHeader로 캐스팅하여 어떤 종류의 패킷인지 확인한다.
+		//	PacketHeader* header = (PacketHeader*)pOverlappedEx->buffer;
+
+		//	// 2. 패킷 종류에 따라 처리를 분기한다.
+		//	if (header->packetType == PacketType::CHAT_MESSAGE)
+		//	{
+		//		// 받은 패킷이 ChatMessagePacket이라고 확신하고 캐스팅한다.
+		//		ChatMessagePacket* chatPacket = (ChatMessagePacket*)pOverlappedEx->buffer;
+
+		//		std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
+
+		//		// 3. 브로드캐스팅 로직: 받은 패킷 그대로를 다른 클라이언트에게 전달한다.
+		//		EnterCriticalSection(&g_cs);
+		//		for (Session* pOtherSession : SessionList)
+		//		{
+		//			if (pOtherSession != pSession)
+		//			{
+		//				// 받은 패킷의 크기(header->packetSize)만큼만 정확히 보낸다.
+		//				send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
+		//			}
+		//		}
+		//		LeaveCriticalSection(&g_cs);
+		//	}
+		//	// else if (header->packetType == PacketType::LOGIN_REQUEST) { ... }
+		//	// 나중에 다른 종류의 패킷 처리 로직을 여기에 추가할 수 있다.
+
+
+		//	// 4. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
+		//	DWORD recvBytes = 0;
+		//	DWORD flags = 0;
+		//	if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
+		//	{
+		//		if (WSAGetLastError() != WSA_IO_PENDING)
+		//		{
+		//			std::cout << "WSARecv failed in worker" << std::endl;
+		//			// 실제로는 여기서도 접속 종료 처리를 해줘야 합니다.
+		//		}
+		//	}
+		//}
+
+
 		if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
 		{
-			// 1. 받은 데이터를 PacketHeader로 캐스팅하여 어떤 종류의 패킷인지 확인한다.
-			PacketHeader* header = (PacketHeader*)pOverlappedEx->buffer;
+			// 1. 받은 데이터를 세션의 수신 버퍼 뒤에 추가한다.
+			memcpy(&pSession->recvBuffer[pSession->recvBytes], pOverlappedEx->buffer, bytesTransferred);
+			pSession->recvBytes += bytesTransferred;
 
-			// 2. 패킷 종류에 따라 처리를 분기한다.
-			if (header->packetType == PacketType::CHAT_MESSAGE)
+			int processedBytes = 0; // 이번에 처리한 총 바이트 수
+
+			// 2. 버퍼에 완전한 패킷이 있는지 반복해서 확인
+			while (pSession->recvBytes > 0)
 			{
-				// 받은 패킷이 ChatMessagePacket이라고 확신하고 캐스팅한다.
-				ChatMessagePacket* chatPacket = (ChatMessagePacket*)pOverlappedEx->buffer;
+				// 2-1. 최소한 헤더는 읽을 수 있는지 확인
+				if (pSession->recvBytes < sizeof(PacketHeader))
+					break;
 
-				std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
+				// 현재 처리할 위치에서 헤더를 읽어온다.
+				PacketHeader* header = (PacketHeader*)&pSession->recvBuffer[processedBytes];
 
-				// 3. 브로드캐스팅 로직: 받은 패킷 그대로를 다른 클라이언트에게 전달한다.
-				EnterCriticalSection(&g_cs);
-				for (Session* pOtherSession : SessionList)
+				// 2-2. 완전한 패킷 하나가 도착했는지 확인
+				if (pSession->recvBytes < header->packetSize)
+					break;
+
+				// 3. 패킷 종류에 따라 처리 분기
+				if (header->packetType == PacketType::CHAT_MESSAGE)
 				{
-					if (pOtherSession != pSession)
+					ChatMessagePacket* chatPacket = (ChatMessagePacket*)&pSession->recvBuffer[processedBytes];
+					std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
+
+					// 3-1. 브로드캐스팅 로직
+					EnterCriticalSection(&g_cs);
+					for (Session* pOtherSession : SessionList)
 					{
-						// 받은 패킷의 크기(header->packetSize)만큼만 정확히 보낸다.
-						send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
+						if (pOtherSession != pSession)
+						{
+							send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
+						}
 					}
+					LeaveCriticalSection(&g_cs);
 				}
-				LeaveCriticalSection(&g_cs);
+
+				// 4. 처리한 만큼 위치와 남은 데이터 양을 갱신
+				processedBytes += header->packetSize;
+				pSession->recvBytes -= header->packetSize;
 			}
-			// else if (header->packetType == PacketType::LOGIN_REQUEST) { ... }
-			// 나중에 다른 종류의 패킷 처리 로직을 여기에 추가할 수 있다.
 
+			// 5. 처리한 데이터를 버퍼에서 제거 (남은 데이터를 버퍼 앞으로 당겨오기)
+			if (processedBytes > 0)
+			{
+				// 아직 처리되지 않은 데이터가 있다면, 버퍼의 시작 위치로 복사한다.
+				if (pSession->recvBytes > 0)
+				{
+					memmove(pSession->recvBuffer, &pSession->recvBuffer[processedBytes], pSession->recvBytes);
+				}
+			}
 
-			// 4. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
-			DWORD recvBytes = 0;
+			// 6. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
+			DWORD recvNumBytes = 0;
 			DWORD flags = 0;
-			if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
+			if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvNumBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
 			{
 				if (WSAGetLastError() != WSA_IO_PENDING)
 				{
 					std::cout << "WSARecv failed in worker" << std::endl;
-					// 실제로는 여기서도 접속 종료 처리를 해줘야 합니다.
 				}
 			}
 		}
