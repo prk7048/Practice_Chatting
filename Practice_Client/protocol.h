@@ -44,6 +44,7 @@ enum class PacketType : short
     LOGIN_REQUEST = 1,
     CHAT_MESSAGE_REQUEST = 2, // 클라이언트가 서버로 보내는 채팅 요청
     CHAT_MESSAGE_BROADCAST = 3, // 서버가 클라이언트들에게 뿌리는 채팅
+    SYSTEM_MESSAGE_BROADCAST = 4,
 };
 
 #pragma pack(push, 1)
@@ -72,6 +73,13 @@ struct ChatMessageBroadcastPacket
 {
     PacketHeader header;
     char nickname[NICKNAME_LENGTH];
+    char message[CHAT_LENGTH];
+};
+
+// 시스템 메시지 브로드캐스트 패킷 (Server -> Client)
+struct SystemMessageBroadcastPacket
+{
+    PacketHeader header;
     char message[CHAT_LENGTH];
 };
 #pragma pack(pop)

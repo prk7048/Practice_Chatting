@@ -95,6 +95,25 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 			{
 				std::cout << pSession->socket << " socket disconnected" << std::endl;
 
+				// 퇴장 알림 메시지를 보내기 전에 닉네임이 있는지 확인
+				if (strlen(pSession->nickname) > 0)
+				{
+					SystemMessageBroadcastPacket leavePacket;
+					leavePacket.header.packetType = PacketType::SYSTEM_MESSAGE_BROADCAST;
+					sprintf_s(leavePacket.message, "[SYSTEM] '%s'님이 퇴장했습니다.", pSession->nickname);
+					leavePacket.header.packetSize = sizeof(PacketHeader) + strlen(leavePacket.message) + 1;
+
+					EnterCriticalSection(&g_cs);
+					for (Session* pOtherSession : SessionList)
+					{
+						// 접속 종료하는 세션을 제외한 모든 세션에게 보낸다.
+						if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
+						{
+							send(pOtherSession->socket, (const char*)&leavePacket, leavePacket.header.packetSize, 0);
+						}
+					}
+					LeaveCriticalSection(&g_cs);
+				}
 				// 1. 세션 목록에서 해당 세션을 제거
 				EnterCriticalSection(&g_cs);
 				for (auto it = SessionList.begin(); it != SessionList.end(); ++it)
@@ -211,6 +230,24 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 					// 세션에 닉네임 저장
 					strcpy_s(pSession->nickname, loginPacket->nickname);
 					std::cout << pSession->socket << " Logged in as: " << pSession->nickname << std::endl;
+
+					// 모든 클라이언트에게 입장 알림 메시지 브로드캐스팅
+					SystemMessageBroadcastPacket enterPacket;
+					enterPacket.header.packetType = PacketType::SYSTEM_MESSAGE_BROADCAST;
+					sprintf_s(enterPacket.message, "[SYSTEM] '%s'님이 입장했습니다.", pSession->nickname);
+					enterPacket.header.packetSize = sizeof(PacketHeader) + strlen(enterPacket.message) + 1;
+
+					EnterCriticalSection(&g_cs);
+					for (Session* pOtherSession : SessionList)
+					{
+						// 자기 자신을 제외한 다른 로그인 된 사용자에게만 보낸다.
+						if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
+						{
+							send(pOtherSession->socket, (const char*)&enterPacket, enterPacket.header.packetSize, 0);
+						}
+					}
+					LeaveCriticalSection(&g_cs);
+				
 				}
 				else if (header->packetType == PacketType::CHAT_MESSAGE_REQUEST)
 				{

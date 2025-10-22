@@ -97,6 +97,14 @@ unsigned int __stdcall RecvThread(void* pArguments)
                 std::cout << "\n[" << receivedPacket->nickname << "]: " << receivedPacket->message << std::endl;
                 std::cout << "Enter message: ";
             }
+            else if (header->packetType == PacketType::SYSTEM_MESSAGE_BROADCAST)
+            {
+                SystemMessageBroadcastPacket* receivedPacket = (SystemMessageBroadcastPacket*)&recvBuffer[processedBytes];
+                receivedPacket->message[CHAT_LENGTH - 1] = '\0'; // 널 문자 처리
+
+                std::cout << "\n" << receivedPacket->message << std::endl;
+                std::cout << "Enter message: ";
+            }
 
             processedBytes += header->packetSize;
             receivedBytes -= header->packetSize;
