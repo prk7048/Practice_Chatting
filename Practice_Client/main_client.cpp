@@ -71,19 +71,31 @@ unsigned int __stdcall RecvThread(void* pArguments)
             if (receivedBytes < header->packetSize)
                 break;
 
-            // 채팅 패킷 처리
-            if (header->packetType == PacketType::CHAT_MESSAGE)
+            //// 채팅 패킷 처리
+            //if (header->packetType == PacketType::CHAT_MESSAGE)
+            //{
+            //    ChatMessagePacket* receivedPacket = (ChatMessagePacket*)&recvBuffer[processedBytes];
+
+            //    // C-style 문자열은 마지막에 널 문자('\0')가 있어야 안전하게 출력할 수 있다.
+            //    // 패킷 사이즈에서 헤더 사이즈를 뺀 것이 실제 메시지 데이터의 길이이다.
+            //    int messageDataLength = header->packetSize - sizeof(PacketHeader);
+            //    // 메시지 배열의 마지막은 항상 널 문자여야 하므로, messageDataLength - 1 위치에 널 문자를 넣어준다.
+            //    receivedPacket->message[messageDataLength - 1] = '\0';
+
+            //    std::cout << "\n[상대방]: " << receivedPacket->message << std::endl;
+            //    std::cout << "Enter message: "; // 다음 입력을 위해 프롬프트 재출력
+            //}
+
+            if (header->packetType == PacketType::CHAT_MESSAGE_BROADCAST)
             {
-                ChatMessagePacket* receivedPacket = (ChatMessagePacket*)&recvBuffer[processedBytes];
+                ChatMessageBroadcastPacket* receivedPacket = (ChatMessageBroadcastPacket*)&recvBuffer[processedBytes];
 
-                // C-style 문자열은 마지막에 널 문자('\0')가 있어야 안전하게 출력할 수 있다.
-                // 패킷 사이즈에서 헤더 사이즈를 뺀 것이 실제 메시지 데이터의 길이이다.
-                int messageDataLength = header->packetSize - sizeof(PacketHeader);
-                // 메시지 배열의 마지막은 항상 널 문자여야 하므로, messageDataLength - 1 위치에 널 문자를 넣어준다.
-                receivedPacket->message[messageDataLength - 1] = '\0';
+                // 널 문자 처리
+                receivedPacket->nickname[NICKNAME_LENGTH - 1] = '\0';
+                receivedPacket->message[CHAT_LENGTH - 1] = '\0';
 
-                std::cout << "\n[상대방]: " << receivedPacket->message << std::endl;
-                std::cout << "Enter message: "; // 다음 입력을 위해 프롬프트 재출력
+                std::cout << "\n[" << receivedPacket->nickname << "]: " << receivedPacket->message << std::endl;
+                std::cout << "Enter message: ";
             }
 
             processedBytes += header->packetSize;
@@ -118,33 +130,73 @@ int main(void)
 		return -1;
 	}
 
-	std::cout << "server connected!" << std::endl;
+	//std::cout << "server connected!" << std::endl;
 
-	// 수신 스레드 생성
-	HANDLE hRecvThread = (HANDLE)_beginthreadex(NULL, 0, RecvThread, (void*)clientSocket, 0, NULL);
+	//// 수신 스레드 생성
+	//HANDLE hRecvThread = (HANDLE)_beginthreadex(NULL, 0, RecvThread, (void*)clientSocket, 0, NULL);
 
-	// --- 송신(Send) 전용 메인 스레드 ---
-	while (true)
-	{
-		char message[256] = { 0, };
-		std::cout << "Enter message: ";
-		std::cin.getline(message, sizeof(message));
+	//// --- 송신(Send) 전용 메인 스레드 ---
+	//while (true)
+	//{
+	//	char message[256] = { 0, };
+	//	std::cout << "Enter message: ";
+	//	std::cin.getline(message, sizeof(message));
 
-		if (strlen(message) > 0)
-		{
-			ChatMessagePacket chatPacket;
-			chatPacket.header.packetType = PacketType::CHAT_MESSAGE;
-			strcpy_s(chatPacket.message, message);
-			chatPacket.header.packetSize = sizeof(PacketHeader) + strlen(chatPacket.message) + 1;
+	//	if (strlen(message) > 0)
+	//	{
+	//		ChatMessagePacket chatPacket;
+	//		chatPacket.header.packetType = PacketType::CHAT_MESSAGE;
+	//		strcpy_s(chatPacket.message, message);
+	//		chatPacket.header.packetSize = sizeof(PacketHeader) + strlen(chatPacket.message) + 1;
 
-			send(clientSocket, (const char*)&chatPacket, chatPacket.header.packetSize, 0);
-		}
+	//		send(clientSocket, (const char*)&chatPacket, chatPacket.header.packetSize, 0);
+	//	}
 
-		if (strcmp(message, "q") == 0)
-		{
-			break;
-		}
-	}
+	//	if (strcmp(message, "q") == 0)
+	//	{
+	//		break;
+	//	}
+	//}
+
+    // ...
+    std::cout << "server connected!" << std::endl;
+
+    // --- 닉네임 입력 및 로그인 요청 ---
+    std::cout << "Enter your nickname: ";
+    char nickname[NICKNAME_LENGTH];
+    std::cin.getline(nickname, sizeof(nickname));
+
+    LoginRequestPacket loginPacket;
+    loginPacket.header.packetType = PacketType::LOGIN_REQUEST;
+    strcpy_s(loginPacket.nickname, nickname);
+    loginPacket.header.packetSize = sizeof(PacketHeader) + strlen(loginPacket.nickname) + 1;
+    send(clientSocket, (const char*)&loginPacket, loginPacket.header.packetSize, 0);
+
+    // 수신 스레드 생성
+    HANDLE hRecvThread = (HANDLE)_beginthreadex(NULL, 0, RecvThread, (void*)clientSocket, 0, NULL);
+
+    // --- 송신(Send) 전용 메인 스레드 ---
+    while (true)
+    {
+        char message[CHAT_LENGTH] = { 0, };
+        std::cout << "Enter message: ";
+        std::cin.getline(message, sizeof(message));
+
+        if (strlen(message) > 0)
+        {
+            ChatMessageRequestPacket chatPacket;
+            chatPacket.header.packetType = PacketType::CHAT_MESSAGE_REQUEST;
+            strcpy_s(chatPacket.message, message);
+            chatPacket.header.packetSize = sizeof(PacketHeader) + strlen(chatPacket.message) + 1;
+
+            send(clientSocket, (const char*)&chatPacket, chatPacket.header.packetSize, 0);
+        }
+
+        if (strcmp(message, "q") == 0)
+        {
+            break;
+        }
+    }
 
 	// 스레드가 끝날 때까지 잠시 기다려주는 것이 좋습니다.
 	WaitForSingleObject(hRecvThread, INFINITE);

@@ -55,6 +55,7 @@ struct Session
 
 	char recvBuffer[4096]; // 각 세션별 수신 버퍼
 	int recvBytes;         // 현재까지 수신한 바이트 수
+	char nickname[NICKNAME_LENGTH];
 
 	// 생성자에서 멤버 변수들을 초기화합니다.
 	Session() : socket(INVALID_SOCKET), recvBytes(0) // recvBytes 초기화 추가
@@ -63,6 +64,7 @@ struct Session
 		recvOverlapped.ioType = EIoOperation::IO_RECV;
 		recvOverlapped.session = this;
 		ZeroMemory(recvBuffer, sizeof(recvBuffer)); // 버퍼 초기화
+		ZeroMemory(nickname, sizeof(nickname)); // 닉네임 초기화 추가
 	}
 };
 
@@ -108,6 +110,7 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 				// 2. 소켓을 닫고 세션 객체 메모리 해제
 				closesocket(pSession->socket);
 				delete pSession;
+
 			}
 			continue; // 다음 작업을 기다림
 		}
@@ -181,24 +184,58 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 				if (pSession->recvBytes < header->packetSize)
 					break;
 
-				// 3. 패킷 종류에 따라 처리 분기
-				if (header->packetType == PacketType::CHAT_MESSAGE)
-				{
-					ChatMessagePacket* chatPacket = (ChatMessagePacket*)&pSession->recvBuffer[processedBytes];
-					std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
+				//// 3. 패킷 종류에 따라 처리 분기
+				//if (header->packetType == PacketType::CHAT_MESSAGE)
+				//{
+				//	ChatMessagePacket* chatPacket = (ChatMessagePacket*)&pSession->recvBuffer[processedBytes];
+				//	std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
 
-					// 3-1. 브로드캐스팅 로직
+				//	// 3-1. 브로드캐스팅 로직
+				//	EnterCriticalSection(&g_cs);
+				//	for (Session* pOtherSession : SessionList)
+				//	{
+				//		if (pOtherSession != pSession)
+				//		{
+				//			send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
+				//		}
+				//	}
+				//	LeaveCriticalSection(&g_cs);
+
+				//}
+
+				// 3. 패킷 종류에 따라 처리 분기
+				if (header->packetType == PacketType::LOGIN_REQUEST)
+				{
+					LoginRequestPacket* loginPacket = (LoginRequestPacket*)&pSession->recvBuffer[processedBytes];
+
+					// 세션에 닉네임 저장
+					strcpy_s(pSession->nickname, loginPacket->nickname);
+					std::cout << pSession->socket << " Logged in as: " << pSession->nickname << std::endl;
+				}
+				else if (header->packetType == PacketType::CHAT_MESSAGE_REQUEST)
+				{
+					ChatMessageRequestPacket* requestPacket = (ChatMessageRequestPacket*)&pSession->recvBuffer[processedBytes];
+					std::cout << pSession->nickname << " Chat: " << requestPacket->message << std::endl;
+
+					// 3-1. 다른 클라이언트에게 브로드캐스팅할 패킷을 새로 만든다.
+					ChatMessageBroadcastPacket broadcastPacket;
+					broadcastPacket.header.packetType = PacketType::CHAT_MESSAGE_BROADCAST;
+					strcpy_s(broadcastPacket.nickname, pSession->nickname);
+					strcpy_s(broadcastPacket.message, requestPacket->message);
+					broadcastPacket.header.packetSize = sizeof(PacketHeader) + strlen(broadcastPacket.nickname) + 1 + strlen(broadcastPacket.message) + 1;
+
+					// 3-2. 브로드캐스팅 로직
 					EnterCriticalSection(&g_cs);
 					for (Session* pOtherSession : SessionList)
 					{
-						if (pOtherSession != pSession)
+						// 로그인 된 다른 사용자에게만 보낸다. (자기 자신 제외)
+						if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
 						{
-							send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
+							send(pOtherSession->socket, (const char*)&broadcastPacket, broadcastPacket.header.packetSize, 0);
 						}
 					}
 					LeaveCriticalSection(&g_cs);
 				}
-
 				// 4. 처리한 만큼 위치와 남은 데이터 양을 갱신
 				processedBytes += header->packetSize;
 				pSession->recvBytes -= header->packetSize;
