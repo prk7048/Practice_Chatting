@@ -1,53 +1,35 @@
-//#pragma once
-//// =============================================================
-////                       프로토콜 정의
-//// =============================================================
-//
-//// 패킷의 종류를 구분하기 위한 열거형
-//enum class PacketType : short
-//{
-//    LOGIN_REQUEST = 1,
-//    CHAT_MESSAGE = 2,
-//};
-//
-//// 모든 패킷의 맨 앞에 붙을 헤더
-//// __pragma(pack(1))은 구조체 멤버 사이에 여분의 공간(padding)을 넣지 않도록 하여
-//// 네트워크로 전송했을 때 데이터의 크기를 예측 가능하게 만듭니다.
-//#pragma pack(push, 1)
-//struct PacketHeader
-//{
-//    short packetSize;
-//    PacketType packetType;
-//};
-//
-//// 채팅 메시지 패킷 구조체
-//struct ChatMessagePacket
-//{
-//    PacketHeader header;
-//    // C++ string 대신 고정 크기 배열을 사용해야 패킷 크기 계산이 용이합니다.
-//    char message[256];
-//};
-//#pragma pack(pop)
-//
-//// =============================================================
-
 #pragma once
 // =============================================================
 //                       프로토콜 정의
 // =============================================================
 constexpr int NICKNAME_LENGTH = 32;
 constexpr int CHAT_LENGTH = 256;
+constexpr int ROOM_TITLE_LENGTH = 32;
+constexpr int MAX_ROOM_COUNT = 50;
 
 // 패킷의 종류를 구분하기 위한 열거형
 enum class PacketType : short
 {
+    // 로그인 관련
     LOGIN_REQUEST = 1,
-    LOGIN_RESPONSE = 2, // --- 타입을 하나로 통합하고, 구조체 내부 플래그로 성공/실패 구분
+    LOGIN_RESPONSE = 2,
 
+    // 채팅 관련
     CHAT_MESSAGE_REQUEST = 10,
     CHAT_MESSAGE_BROADCAST = 11,
 
+    // 시스템 메시지 관련
     SYSTEM_MESSAGE_BROADCAST = 20,
+
+    // --- 채팅방 관련 ---
+    ROOM_LIST_REQUEST = 30,
+    ROOM_LIST_RESPONSE = 31,
+
+    CREATE_ROOM_REQUEST = 32,
+    CREATE_ROOM_RESPONSE = 33,
+
+    JOIN_ROOM_REQUEST = 34,
+    JOIN_ROOM_RESPONSE = 35,
 };
 
 #pragma pack(push, 1)
@@ -92,6 +74,52 @@ struct SystemMessageBroadcastPacket
     PacketHeader header;
     char message[CHAT_LENGTH];
 };
-#pragma pack(pop)
 
+// 방 정보 구조체 (ROOM_LIST_RESPONSE 에서 사용)
+struct RoomInfo
+{
+    int roomId;
+    char title[ROOM_TITLE_LENGTH];
+    short userCount;
+};
+
+// 방 목록 응답 (Server -> Client)
+struct RoomListResponsePacket
+{
+    PacketHeader header;
+    short roomCount;
+    RoomInfo rooms[MAX_ROOM_COUNT];
+};
+
+// 방 생성 요청 (Client -> Server)
+struct CreateRoomRequestPacket
+{
+    PacketHeader header;
+    char title[ROOM_TITLE_LENGTH];
+};
+
+// 방 생성 응답 (Server -> Client)
+struct CreateRoomResponsePacket
+{
+    PacketHeader header;
+    bool success;
+    RoomInfo createdRoomInfo; // 성공 시 생성된 방 정보
+};
+
+// 방 입장 요청 (Client -> Server)
+struct JoinRoomRequestPacket
+{
+    PacketHeader header;
+    int roomId;
+};
+
+// 방 입장 응답 (Server -> Client)
+struct JoinRoomResponsePacket
+{
+    PacketHeader header;
+    bool success;
+    RoomInfo joinedRoomInfo; // 성공 시 입장한 방 정보
+};
+
+#pragma pack(pop)
 // =============================================================
