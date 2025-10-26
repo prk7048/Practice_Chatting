@@ -32,20 +32,9 @@ struct OverlappedEx
 	char buffer[1024];
 };
 
-//// 클라이언트 하나의 정보를 담는 세션 구조체
-//struct Session
-//{
-//	SOCKET socket;
-//	OverlappedEx recvOverlapped; // 각 세션은 자신만의 '수신'용 OverlappedEx를 가집니다.
-//
-//	// 생성자에서 멤버 변수들을 초기화합니다.
-//	Session() : socket(INVALID_SOCKET)
-//	{
-//		ZeroMemory(&recvOverlapped.overlapped, sizeof(recvOverlapped.overlapped));
-//		recvOverlapped.ioType = EIoOperation::IO_RECV;
-//		recvOverlapped.session = this; // 자기 자신을 가리키도록 설정
-//	}
-//};
+// --- Room 구조체와 RoomList를 새로 추가합니다 ---
+struct Room; // Session 구조체에서 Room을 참조해야 하므로 전방 선언
+
 
 // 클라이언트 하나의 정보를 담는 세션 구조체
 struct Session
@@ -56,9 +45,10 @@ struct Session
 	char recvBuffer[4096]; // 각 세션별 수신 버퍼
 	int recvBytes;         // 현재까지 수신한 바이트 수
 	char nickname[NICKNAME_LENGTH];
+	Room* pRoom; // --- 자신이 속한 방을 가리키는 포인터 추가 ---
 
 	// 생성자에서 멤버 변수들을 초기화합니다.
-	Session() : socket(INVALID_SOCKET), recvBytes(0) // recvBytes 초기화 추가
+	Session() : socket(INVALID_SOCKET), recvBytes(0), pRoom(nullptr) // pRoom 초기화 추가
 	{
 		ZeroMemory(&recvOverlapped.overlapped, sizeof(recvOverlapped.overlapped));
 		recvOverlapped.ioType = EIoOperation::IO_RECV;
@@ -68,8 +58,23 @@ struct Session
 	}
 };
 
+// 채팅방 하나의 정보를 담는 구조체
+struct Room
+{
+	int roomId;
+	char title[ROOM_TITLE_LENGTH];
+	std::vector<Session*> sessions; // 이 방에 속한 세션들의 목록
+
+	Room() : roomId(-1)
+	{
+		ZeroMemory(title, sizeof(title));
+	}
+};
+
 // Session List Vector
-std::vector<Session*> SessionList;
+std::vector<Session*> SessionList; 
+std::vector<Room*> RoomList; // --- RoomList 전역 변수 추가 ---
+int g_nextRoomId = 1; // 다음에 생성될 방에 부여할 고유 ID
 
 // Lock
 CRITICAL_SECTION g_cs;
@@ -94,6 +99,23 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 			if (pSession != nullptr) // pSession이 NULL이 아닐 때만 처리
 			{
 				std::cout << pSession->socket << " socket disconnected" << std::endl;
+
+				// 세션이 방에 들어가 있었다면, 방에서 퇴장 처리
+				if (pSession->pRoom != nullptr)
+				{
+					Room* pRoom = pSession->pRoom;
+					EnterCriticalSection(&g_cs);
+					// 방의 세션 목록에서 해당 세션을 찾아 제거
+					for (auto it = pRoom->sessions.begin(); it != pRoom->sessions.end(); ++it)
+					{
+						if (*it == pSession)
+						{
+							pRoom->sessions.erase(it);
+							break;
+						}
+					}
+					LeaveCriticalSection(&g_cs);
+				}
 
 				// 퇴장 알림 메시지를 보내기 전에 닉네임이 있는지 확인
 				if (strlen(pSession->nickname) > 0)
@@ -135,51 +157,7 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 		}
 
 
-		//// WorkerThread 함수 안의 if (pOverlappedEx->ioType == EIoOperation::IO_RECV) 블록
-
-		//// --- 성공 경로 (I/O 작업 완료) ---
-		//if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
-		//{
-		//	// 1. 받은 데이터를 PacketHeader로 캐스팅하여 어떤 종류의 패킷인지 확인한다.
-		//	PacketHeader* header = (PacketHeader*)pOverlappedEx->buffer;
-
-		//	// 2. 패킷 종류에 따라 처리를 분기한다.
-		//	if (header->packetType == PacketType::CHAT_MESSAGE)
-		//	{
-		//		// 받은 패킷이 ChatMessagePacket이라고 확신하고 캐스팅한다.
-		//		ChatMessagePacket* chatPacket = (ChatMessagePacket*)pOverlappedEx->buffer;
-
-		//		std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
-
-		//		// 3. 브로드캐스팅 로직: 받은 패킷 그대로를 다른 클라이언트에게 전달한다.
-		//		EnterCriticalSection(&g_cs);
-		//		for (Session* pOtherSession : SessionList)
-		//		{
-		//			if (pOtherSession != pSession)
-		//			{
-		//				// 받은 패킷의 크기(header->packetSize)만큼만 정확히 보낸다.
-		//				send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
-		//			}
-		//		}
-		//		LeaveCriticalSection(&g_cs);
-		//	}
-		//	// else if (header->packetType == PacketType::LOGIN_REQUEST) { ... }
-		//	// 나중에 다른 종류의 패킷 처리 로직을 여기에 추가할 수 있다.
-
-
-		//	// 4. (매우 중요!) 다음 수신을 위해 WSARecv를 다시 호출
-		//	DWORD recvBytes = 0;
-		//	DWORD flags = 0;
-		//	if (WSARecv(pSession->socket, &pOverlappedEx->wsaBuf, 1, &recvBytes, &flags, &pOverlappedEx->overlapped, NULL) == SOCKET_ERROR)
-		//	{
-		//		if (WSAGetLastError() != WSA_IO_PENDING)
-		//		{
-		//			std::cout << "WSARecv failed in worker" << std::endl;
-		//			// 실제로는 여기서도 접속 종료 처리를 해줘야 합니다.
-		//		}
-		//	}
-		//}
-
+		
 
 		if (pOverlappedEx->ioType == EIoOperation::IO_RECV)
 		{
@@ -203,24 +181,6 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 				if (pSession->recvBytes < header->packetSize)
 					break;
 
-				//// 3. 패킷 종류에 따라 처리 분기
-				//if (header->packetType == PacketType::CHAT_MESSAGE)
-				//{
-				//	ChatMessagePacket* chatPacket = (ChatMessagePacket*)&pSession->recvBuffer[processedBytes];
-				//	std::cout << pSession->socket << " socket Received Chat: " << chatPacket->message << std::endl;
-
-				//	// 3-1. 브로드캐스팅 로직
-				//	EnterCriticalSection(&g_cs);
-				//	for (Session* pOtherSession : SessionList)
-				//	{
-				//		if (pOtherSession != pSession)
-				//		{
-				//			send(pOtherSession->socket, (const char*)chatPacket, header->packetSize, 0);
-				//		}
-				//	}
-				//	LeaveCriticalSection(&g_cs);
-
-				//}
 
 				// 3. 패킷 종류에 따라 처리 분기
 				if (header->packetType == PacketType::LOGIN_REQUEST)
@@ -310,26 +270,59 @@ unsigned int __stdcall WorkerThread(void* pArguments)
 					}
 					LeaveCriticalSection(&g_cs);
 				}
+				// 방 목록 요청 처리
+				else if (header->packetType == PacketType::ROOM_LIST_REQUEST)
+				{
+					RoomListResponsePacket responsePacket;
+					responsePacket.header.packetType = PacketType::ROOM_LIST_RESPONSE;
 
-				//	// 3-1. 다른 클라이언트에게 브로드캐스팅할 패킷을 새로 만든다.
-				//	ChatMessageBroadcastPacket broadcastPacket;
-				//	broadcastPacket.header.packetType = PacketType::CHAT_MESSAGE_BROADCAST;
-				//	strcpy_s(broadcastPacket.nickname, pSession->nickname);
-				//	strcpy_s(broadcastPacket.message, requestPacket->message);
-				//	broadcastPacket.header.packetSize = sizeof(PacketHeader) + strlen(broadcastPacket.nickname) + 1 + strlen(broadcastPacket.message) + 1;
+					EnterCriticalSection(&g_cs);
+					responsePacket.roomCount = (short)RoomList.size();
+					for (int i = 0; i < responsePacket.roomCount; ++i)
+					{
+						responsePacket.rooms[i].roomId = RoomList[i]->roomId;
+						strcpy_s(responsePacket.rooms[i].title, RoomList[i]->title);
+						responsePacket.rooms[i].userCount = (short)RoomList[i]->sessions.size();
+					}
+					LeaveCriticalSection(&g_cs);
 
-				//	// 3-2. 브로드캐스팅 로직
-				//	EnterCriticalSection(&g_cs);
-				//	for (Session* pOtherSession : SessionList)
-				//	{
-				//		// 로그인 된 다른 사용자에게만 보낸다. (자기 자신 제외)
-				//		if (pOtherSession != pSession && strlen(pOtherSession->nickname) > 0)
-				//		{
-				//			send(pOtherSession->socket, (const char*)&broadcastPacket, broadcastPacket.header.packetSize, 0);
-				//		}
-				//	}
-				//	LeaveCriticalSection(&g_cs);
-				//}
+					responsePacket.header.packetSize = sizeof(PacketHeader) + sizeof(short) + (responsePacket.roomCount * sizeof(RoomInfo));
+					send(pSession->socket, (const char*)&responsePacket, responsePacket.header.packetSize, 0);
+				}
+
+				// 방 생성 요청 처리
+				else if (header->packetType == PacketType::CREATE_ROOM_REQUEST)
+				{
+					CreateRoomRequestPacket* requestPacket = (CreateRoomRequestPacket*)&pSession->recvBuffer[processedBytes];
+					requestPacket->title[ROOM_TITLE_LENGTH - 1] = '\0'; // 널 문자 보장
+
+					// 1. 새로운 Room 객체 생성 및 초기화
+					Room* newRoom = new Room();
+					EnterCriticalSection(&g_cs);
+					newRoom->roomId = g_nextRoomId++;
+					strcpy_s(newRoom->title, requestPacket->title);
+					RoomList.push_back(newRoom);
+					LeaveCriticalSection(&g_cs);
+
+					// 2. 방을 생성한 유저를 해당 방에 바로 입장시킨다.
+					// (이 부분은 나중에 '방 퇴장' 기능 구현 시 중복되므로 함수로 만들면 좋다)
+					newRoom->sessions.push_back(pSession);
+					pSession->pRoom = newRoom;
+
+					// 3. 클라이언트에게 성공 응답 전송
+					CreateRoomResponsePacket responsePacket;
+					responsePacket.header.packetType = PacketType::CREATE_ROOM_RESPONSE;
+					responsePacket.header.packetSize = sizeof(CreateRoomResponsePacket);
+					responsePacket.success = true;
+					responsePacket.createdRoomInfo.roomId = newRoom->roomId;
+					strcpy_s(responsePacket.createdRoomInfo.title, newRoom->title);
+					responsePacket.createdRoomInfo.userCount = 1;
+
+					send(pSession->socket, (const char*)&responsePacket, responsePacket.header.packetSize, 0);
+
+					std::cout << pSession->nickname << " created room '" << newRoom->title << "'" << std::endl;
+				}
+				
 				// 4. 처리한 만큼 위치와 남은 데이터 양을 갱신
 				processedBytes += header->packetSize;
 				pSession->recvBytes -= header->packetSize;
